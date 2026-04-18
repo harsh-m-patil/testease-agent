@@ -156,7 +156,9 @@ export function runExecute(outputRoot: string, domain: string, runId: string) {
     );
   }
 
-  const command = process.env.TESTEASE_RUNNER_CMD ?? 'pnpm exec playwright test --config playwright.config.ts';
+  const command =
+    process.env.TESTEASE_RUNNER_CMD ??
+    `pnpm exec playwright test --config "${configPath}"`;
   const startedAt = new Date().toISOString();
   const child = spawnSync(command, {
     cwd: generatedDir,
