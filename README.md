@@ -4,7 +4,7 @@ Bootstrap CLI shell for the TestEase lifecycle.
 
 ## Implemented in Slice 1 (Issue #2)
 
-- Lifecycle-oriented CLI commands with structured help:
+- Lifecycle-oriented CLI commands with structured help (built with Commander):
   - `plan`, `sync`, `approve`, `generate`, `run`, `doctor`
 - Config resolution with precedence:
   - **CLI > env > config > defaults**
@@ -19,8 +19,8 @@ Bootstrap CLI shell for the TestEase lifecycle.
 ## Quickstart
 
 ```bash
-npm install
-npm test
+pnpm install
+pnpm test
 ```
 
 Show CLI help:

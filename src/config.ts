@@ -5,17 +5,17 @@ export interface AppConfig {
   domain?: string;
 }
 
+export interface ConfigInputs {
+  configPath?: string;
+  domain?: string;
+  outputRoot?: string;
+}
+
 export class ConfigError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ConfigError';
   }
-}
-
-interface FlagMap {
-  configPath?: string;
-  domain?: string;
-  outputRoot?: string;
 }
 
 function readConfigFile(path?: string): Partial<AppConfig> {
@@ -41,53 +41,18 @@ function readConfigFile(path?: string): Partial<AppConfig> {
       throw error;
     }
 
-    throw new ConfigError(
-      `Failed to parse config file at ${path}. Ensure it is valid JSON.`,
-    );
+    throw new ConfigError(`Failed to parse config file at ${path}. Ensure it is valid JSON.`);
   }
 }
 
-export function parseRunFlags(argv: string[]): FlagMap {
-  const flags: FlagMap = {};
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const current = argv[index];
-
-    if (current === '--config') {
-      flags.configPath = argv[index + 1];
-      index += 1;
-      continue;
-    }
-
-    if (current === '--domain') {
-      flags.domain = argv[index + 1];
-      index += 1;
-      continue;
-    }
-
-    if (current === '--output-root') {
-      flags.outputRoot = argv[index + 1];
-      index += 1;
-      continue;
-    }
-  }
-
-  return flags;
-}
-
-export function resolveConfig(runArgv: string[]): AppConfig {
-  const flags = parseRunFlags(runArgv);
-
-  const configPath = flags.configPath ?? process.env.TESTEASE_CONFIG;
+export function resolveConfig(inputs: ConfigInputs): AppConfig {
+  const configPath = inputs.configPath ?? process.env.TESTEASE_CONFIG;
   const fileConfig = readConfigFile(configPath);
 
   const outputRoot =
-    flags.outputRoot ??
-    process.env.TESTEASE_OUTPUT_ROOT ??
-    fileConfig.outputRoot ??
-    '.testease';
+    inputs.outputRoot ?? process.env.TESTEASE_OUTPUT_ROOT ?? fileConfig.outputRoot ?? '.testease';
 
-  const domain = flags.domain ?? process.env.TESTEASE_DOMAIN ?? fileConfig.domain;
+  const domain = inputs.domain ?? process.env.TESTEASE_DOMAIN ?? fileConfig.domain;
 
   if (!outputRoot || outputRoot.trim().length === 0) {
     throw new ConfigError(

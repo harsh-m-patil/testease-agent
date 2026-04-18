@@ -2,12 +2,16 @@
   "name": "testease-agent",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.28.0",
   "type": "module",
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
     "doctor": "node --import tsx src/cli.ts doctor",
     "start": "node --import tsx src/cli.ts"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",

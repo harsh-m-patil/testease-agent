@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { resolveConfig } from './config.ts';
+import { resolveConfig, type ConfigInputs } from './config.ts';
 
 interface CheckResult {
   name: string;
@@ -45,12 +45,9 @@ function checkOutputRootWritable(outputRoot: string): CheckResult {
   }
 }
 
-export function runDoctor(commandArgv: string[]): number {
-  const config = resolveConfig(commandArgv);
-  const checks: CheckResult[] = [
-    checkNodeVersion(),
-    checkOutputRootWritable(config.outputRoot),
-  ];
+export function runDoctor(inputs: ConfigInputs): number {
+  const config = resolveConfig(inputs);
+  const checks: CheckResult[] = [checkNodeVersion(), checkOutputRootWritable(config.outputRoot)];
 
   process.stdout.write('Doctor checks\n');
 
