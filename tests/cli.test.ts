@@ -101,4 +101,92 @@ describe('CLI shell', () => {
     expect(event.event).toBe('run_started');
     expect(event.runId).toBe(runJson.runId);
   });
+
+  it('runs thin e2e sequence plan -> approve -> generate -> run', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'testease-slice2-'));
+
+    const plan = runCli([
+      'plan',
+      '--domain',
+      'docs.example.com',
+      '--url',
+      'https://docs.example.com',
+      '--output-root',
+      tempRoot,
+    ]);
+    expect(plan.status).toBe(0);
+
+    const runIdLine = plan.stdout.split('\n').find((line) => line.startsWith('runId: '));
+    expect(runIdLine).toBeTruthy();
+    const runId = runIdLine!.replace('runId: ', '').trim();
+
+    const approve = runCli([
+      'approve',
+      '--domain',
+      'docs.example.com',
+      '--run-id',
+      runId,
+      '--output-root',
+      tempRoot,
+    ]);
+    expect(approve.status).toBe(0);
+    expect(approve.stdout).toContain('approvalPath:');
+
+    const generate = runCli([
+      'generate',
+      '--domain',
+      'docs.example.com',
+      '--run-id',
+      runId,
+      '--output-root',
+      tempRoot,
+    ]);
+    expect(generate.status).toBe(0);
+    expect(generate.stdout).toContain('specPath:');
+
+    const run = runCli(
+      ['run', '--domain', 'docs.example.com', '--run-id', runId, '--output-root', tempRoot],
+      { TESTEASE_RUNNER_CMD: "node -e \"process.stdout.write('simulated pass\\n')\"" },
+    );
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain('simulated pass');
+    expect(run.stdout).toContain('resultPath:');
+
+    const runDir = join(tempRoot, 'docs-example-com', 'runs', runId);
+    expect(existsSync(join(runDir, 'plan', 'plan.canonical.json'))).toBe(true);
+    expect(existsSync(join(runDir, 'approval', 'approval.json'))).toBe(true);
+    expect(existsSync(join(runDir, 'generated', 'tests', 'smoke.spec.ts'))).toBe(true);
+    expect(existsSync(join(runDir, 'results', 'summary.json'))).toBe(true);
+  });
+
+  it('fails generate with non-zero exit when approval is missing', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'testease-slice2-fail-'));
+
+    const plan = runCli([
+      'plan',
+      '--domain',
+      'docs.example.com',
+      '--url',
+      'https://docs.example.com',
+      '--output-root',
+      tempRoot,
+    ]);
+
+    const runIdLine = plan.stdout.split('\n').find((line) => line.startsWith('runId: '));
+    expect(runIdLine).toBeTruthy();
+    const runId = runIdLine!.replace('runId: ', '').trim();
+
+    const generate = runCli([
+      'generate',
+      '--domain',
+      'docs.example.com',
+      '--run-id',
+      runId,
+      '--output-root',
+      tempRoot,
+    ]);
+
+    expect(generate.status).toBe(3);
+    expect(generate.stderr).toContain('Approval artifact missing');
+  });
 });

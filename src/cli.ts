@@ -3,15 +3,33 @@
 import { Command } from 'commander';
 import { ConfigError, requireDomain, type ConfigInputs, resolveConfig } from './config.ts';
 import { runDoctor } from './doctor.ts';
+import { LifecycleError, runApprove, runExecute, runGenerate, runPlan } from './lifecycle.ts';
 import { createRunEnvelope } from './run-envelope.ts';
 
-interface RunOptions extends ConfigInputs {}
+interface RunOptions extends ConfigInputs {
+  runId?: string;
+}
+
+interface PlanOptions extends ConfigInputs {
+  url: string;
+}
+
+interface LifecycleRunOptions extends ConfigInputs {
+  runId: string;
+}
 
 function handleRun(options: RunOptions) {
   const config = resolveConfig(options);
   const domain = requireDomain(config);
-  const envelope = createRunEnvelope(config.outputRoot, domain);
 
+  if (options.runId) {
+    const executed = runExecute(config.outputRoot, domain, options.runId);
+    process.stdout.write(`resultPath: ${executed.resultPath}\n`);
+    process.exitCode = executed.exitCode;
+    return;
+  }
+
+  const envelope = createRunEnvelope(config.outputRoot, domain);
   process.stdout.write('Run created\n');
   process.stdout.write(`runId: ${envelope.runId}\n`);
   process.stdout.write(`domain: ${domain}\n`);
@@ -24,6 +42,11 @@ function handleCliError(error: unknown): never {
   if (error instanceof ConfigError) {
     process.stderr.write(`Config error: ${error.message}\n`);
     process.exit(2);
+  }
+
+  if (error instanceof LifecycleError) {
+    process.stderr.write(`Lifecycle error: ${error.message}\n`);
+    process.exit(3);
   }
 
   const message = error instanceof Error ? error.message : 'Unknown failure';
@@ -41,8 +64,18 @@ program
 program
   .command('plan')
   .description('Discover and draft a test plan')
-  .action(() => {
-    process.stdout.write("Command 'plan' not implemented yet.\n");
+  .option('--config <path>', 'Path to JSON config file')
+  .requiredOption('--url <url>', 'Target URL for planning')
+  .option('--domain <domain>', 'Target domain')
+  .option('--output-root <path>', 'Output root directory')
+  .action((options: PlanOptions) => {
+    const config = resolveConfig(options);
+    const domain = requireDomain(config);
+    const planned = runPlan(config.outputRoot, domain, options.url);
+    process.stdout.write('Plan created\n');
+    process.stdout.write(`runId: ${planned.runId}\n`);
+    process.stdout.write(`runDir: ${planned.runDir}\n`);
+    process.stdout.write(`planPath: ${planned.planPath}\n`);
   });
 
 program
@@ -55,15 +88,34 @@ program
 program
   .command('approve')
   .description('Approve a plan hash for generation')
-  .action(() => {
-    process.stdout.write("Command 'approve' not implemented yet.\n");
+  .requiredOption('--run-id <runId>', 'Run ID produced by plan step')
+  .option('--config <path>', 'Path to JSON config file')
+  .option('--domain <domain>', 'Target domain')
+  .option('--output-root <path>', 'Output root directory')
+  .action((options: LifecycleRunOptions) => {
+    const config = resolveConfig(options);
+    const domain = requireDomain(config);
+    const approval = runApprove(config.outputRoot, domain, options.runId);
+    process.stdout.write('Plan approved\n');
+    process.stdout.write(`planHash: ${approval.planHash}\n`);
+    process.stdout.write(`approvalPath: ${approval.approvalPath}\n`);
   });
 
 program
   .command('generate')
   .description('Generate Playwright tests from approved plan')
-  .action(() => {
-    process.stdout.write("Command 'generate' not implemented yet.\n");
+  .requiredOption('--run-id <runId>', 'Run ID produced by plan step')
+  .option('--config <path>', 'Path to JSON config file')
+  .option('--domain <domain>', 'Target domain')
+  .option('--output-root <path>', 'Output root directory')
+  .action((options: LifecycleRunOptions) => {
+    const config = resolveConfig(options);
+    const domain = requireDomain(config);
+    const generated = runGenerate(config.outputRoot, domain, options.runId);
+    process.stdout.write('Tests generated\n');
+    process.stdout.write(`generatedDir: ${generated.generatedDir}\n`);
+    process.stdout.write(`configPath: ${generated.configPath}\n`);
+    process.stdout.write(`specPath: ${generated.specPath}\n`);
   });
 
 program
@@ -72,6 +124,7 @@ program
   .option('--config <path>', 'Path to JSON config file')
   .option('--domain <domain>', 'Target domain')
   .option('--output-root <path>', 'Output root directory')
+  .option('--run-id <runId>', 'Run ID to execute generated tests')
   .action((options: RunOptions) => {
     handleRun(options);
   });
