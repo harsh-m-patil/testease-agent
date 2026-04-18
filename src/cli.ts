@@ -2,6 +2,7 @@
 
 import { Command } from 'commander';
 import { ConfigError, requireDomain, type ConfigInputs, resolveConfig } from './config.ts';
+import { runCrawl } from './crawl.ts';
 import { runDoctor } from './doctor.ts';
 import { LifecycleError, runApprove, runExecute, runGenerate, runPlan } from './lifecycle.ts';
 import { createRunEnvelope } from './run-envelope.ts';
@@ -16,6 +17,16 @@ interface PlanOptions extends ConfigInputs {
 
 interface LifecycleRunOptions extends ConfigInputs {
   runId: string;
+}
+
+interface CrawlOptions extends ConfigInputs {
+  runId: string;
+  url: string;
+  maxPages: number;
+  maxDepth: number;
+  include: string[];
+  exclude: string[];
+  stripParam: string[];
 }
 
 function handleRun(options: RunOptions) {
@@ -53,6 +64,8 @@ function handleCliError(error: unknown): never {
   process.stderr.write(`Unhandled error: ${message}\n`);
   process.exit(1);
 }
+
+const collect = (value: string, previous: string[] = []) => [...previous, value];
 
 const program = new Command();
 
@@ -130,6 +143,40 @@ program
   });
 
 program
+  .command('crawl')
+  .description('Crawl sitemap + links with bounds, dedupe, and typed skips')
+  .requiredOption('--run-id <runId>', 'Run ID for persisted crawl artifacts')
+  .requiredOption('--url <url>', 'Seed URL for crawl')
+  .option('--config <path>', 'Path to JSON config file')
+  .option('--domain <domain>', 'Target domain')
+  .option('--output-root <path>', 'Output root directory')
+  .option('--max-pages <count>', 'Maximum pages to select', (value) => Number.parseInt(value, 10), 25)
+  .option('--max-depth <depth>', 'Maximum crawl depth', (value) => Number.parseInt(value, 10), 2)
+  .option('--include <glob>', 'Include URL path glob (repeatable)', collect, [])
+  .option('--exclude <glob>', 'Exclude URL path glob (repeatable)', collect, [])
+  .option('--strip-param <name>', 'Additional query parameter to strip (repeatable)', collect, [])
+  .action(async (options: CrawlOptions) => {
+    const config = resolveConfig(options);
+    const domain = requireDomain(config);
+    const crawled = await runCrawl({
+      outputRoot: config.outputRoot,
+      domain,
+      runId: options.runId,
+      url: options.url,
+      maxPages: options.maxPages,
+      maxDepth: options.maxDepth,
+      include: options.include,
+      exclude: options.exclude,
+      stripParams: options.stripParam,
+    });
+
+    process.stdout.write('Crawl completed\n');
+    process.stdout.write(`selectedCount: ${crawled.selectedCount}\n`);
+    process.stdout.write(`skippedCount: ${crawled.skippedCount}\n`);
+    process.stdout.write(`crawlPath: ${crawled.crawlPath}\n`);
+  });
+
+program
   .command('doctor')
   .description('Validate local runtime prerequisites')
   .option('--config <path>', 'Path to JSON config file')
@@ -140,7 +187,7 @@ program
   });
 
 try {
-  program.parse(process.argv);
+  await program.parseAsync(process.argv);
 } catch (error) {
   handleCliError(error);
 }

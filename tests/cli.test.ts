@@ -1,7 +1,8 @@
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { describe, expect, it } from 'vitest';
 
 function runCli(args: string[], env: NodeJS.ProcessEnv = {}) {
@@ -10,6 +11,103 @@ function runCli(args: string[], env: NodeJS.ProcessEnv = {}) {
     env: { ...process.env, ...env },
     encoding: 'utf8',
   });
+}
+
+function runCliAsync(args: string[], env: NodeJS.ProcessEnv = {}) {
+  return new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
+    const child = spawn('node', ['--import', 'tsx', 'src/cli.ts', ...args], {
+      cwd: process.cwd(),
+      env: { ...process.env, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8');
+    });
+
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8');
+    });
+
+    child.on('close', (status) => {
+      resolve({ status, stdout, stderr });
+    });
+  });
+}
+
+async function startFixtureSite() {
+  const server = createServer((req, res) => {
+    const path = req.url ?? '/';
+
+    if (path === '/sitemap.xml') {
+      res.writeHead(200, { 'content-type': 'application/xml' });
+      res.end(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>http://127.0.0.1:${(server.address() as { port: number }).port}/about</loc></url>
+  <url><loc>http://127.0.0.1:${(server.address() as { port: number }).port}/products?utm_source=ad</loc></url>
+</urlset>`);
+      return;
+    }
+
+    if (path === '/' || path === '') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(`
+<html><body>
+  <a href="/about">About</a>
+  <a href="/products?fbclid=123">Products duplicate variant</a>
+  <a href="https://example.com/offsite">Offsite</a>
+</body></html>`);
+      return;
+    }
+
+    if (path.startsWith('/about')) {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(`
+<html><body>
+  <a href="/deep/page">Too deep page</a>
+</body></html>`);
+      return;
+    }
+
+    if (path.startsWith('/products')) {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<html><body><h1>Products</h1></body></html>');
+      return;
+    }
+
+    if (path.startsWith('/deep/page')) {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<html><body><h1>Deep</h1></body></html>');
+      return;
+    }
+
+    res.writeHead(404, { 'content-type': 'text/plain' });
+    res.end('not found');
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve());
+  });
+
+  const port = (server.address() as { port: number }).port;
+
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    close: async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
+    },
+  };
 }
 
 describe('CLI shell', () => {
@@ -23,6 +121,7 @@ describe('CLI shell', () => {
     expect(result.stdout).toContain('approve');
     expect(result.stdout).toContain('generate');
     expect(result.stdout).toContain('run');
+    expect(result.stdout).toContain('crawl');
     expect(result.stdout).toContain('doctor');
     expect(result.stdout).toContain('CLI > env > config > defaults');
   });
@@ -188,5 +287,104 @@ describe('CLI shell', () => {
 
     expect(generate.status).toBe(3);
     expect(generate.stderr).toContain('Approval artifact missing');
+  });
+
+  it('crawls sitemap + links with same-origin normalization dedupe and typed skips', async () => {
+    const fixture = await startFixtureSite();
+
+    try {
+      const tempRoot = mkdtempSync(join(tmpdir(), 'testease-crawl-'));
+      const createRun = await runCliAsync(['run', '--domain', '127.0.0.1', '--output-root', tempRoot]);
+      expect(createRun.status).toBe(0);
+
+      const runIdLine = createRun.stdout.split('\n').find((line) => line.startsWith('runId: '));
+      expect(runIdLine).toBeTruthy();
+      const runId = runIdLine!.replace('runId: ', '').trim();
+
+      const crawl = await runCliAsync([
+        'crawl',
+        '--domain',
+        '127.0.0.1',
+        '--run-id',
+        runId,
+        '--url',
+        `${fixture.baseUrl}/`,
+        '--output-root',
+        tempRoot,
+        '--max-pages',
+        '10',
+        '--max-depth',
+        '1',
+      ]);
+
+      expect(crawl.status).toBe(0);
+      expect(crawl.stdout).toContain('crawlPath:');
+
+      const crawlPath = join(tempRoot, '127-0-0-1', 'runs', runId, 'crawl', 'crawl.json');
+      const artifact = JSON.parse(readFileSync(crawlPath, 'utf8')) as {
+        selected: Array<{ url: string }>;
+        skipped: Array<{ reason: string }>;
+      };
+
+      expect(artifact.selected.map((page) => page.url)).toContain(`${fixture.baseUrl}`);
+      expect(artifact.selected.map((page) => page.url)).toContain(`${fixture.baseUrl}/about`);
+      expect(artifact.selected.map((page) => page.url)).toContain(`${fixture.baseUrl}/products`);
+      expect(artifact.skipped.map((skip) => skip.reason)).toContain('out_of_origin');
+      expect(artifact.skipped.map((skip) => skip.reason)).toContain('duplicate_after_normalization');
+      expect(artifact.skipped.map((skip) => skip.reason)).toContain('beyond_max_depth');
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it('honors exclude controls and max-pages deterministically', async () => {
+    const fixture = await startFixtureSite();
+
+    try {
+      const tempRoot = mkdtempSync(join(tmpdir(), 'testease-crawl-bounds-'));
+      const createRun = await runCliAsync(['run', '--domain', '127.0.0.1', '--output-root', tempRoot]);
+      const runId = createRun.stdout
+        .split('\n')
+        .find((line) => line.startsWith('runId: '))!
+        .replace('runId: ', '')
+        .trim();
+
+      const crawl = await runCliAsync([
+        'crawl',
+        '--domain',
+        '127.0.0.1',
+        '--run-id',
+        runId,
+        '--url',
+        `${fixture.baseUrl}/`,
+        '--output-root',
+        tempRoot,
+        '--max-pages',
+        '1',
+        '--max-depth',
+        '2',
+        '--exclude',
+        '/about*',
+      ]);
+
+      expect(crawl.status).toBe(0);
+
+      const crawlPath = join(tempRoot, '127-0-0-1', 'runs', runId, 'crawl', 'crawl.json');
+      const artifact = JSON.parse(readFileSync(crawlPath, 'utf8')) as {
+        selected: Array<{ url: string }>;
+        skipped: Array<{ url: string; reason: string }>;
+      };
+
+      expect(artifact.selected).toHaveLength(1);
+      expect(artifact.selected[0]?.url).toBe(`${fixture.baseUrl}`);
+      expect(artifact.skipped).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ reason: 'excluded_by_pattern' }),
+          expect.objectContaining({ reason: 'beyond_max_pages' }),
+        ]),
+      );
+    } finally {
+      await fixture.close();
+    }
   });
 });
